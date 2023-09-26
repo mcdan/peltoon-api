@@ -60,6 +60,9 @@ func (c Client) Login(username string, password string) error {
 	if err != nil {
 		return err
 	}
+	if loginResponse.StatusCode != 200 {
+		return fmt.Errorf("unable to login: %s", responseBytes)
+	}
 	structResponse := payloads.LoginResponseBody{}
 	err = json.Unmarshal(responseBytes, &structResponse)
 	if err != nil {
@@ -157,6 +160,9 @@ func (c Client) GetRide(id string, ride *dto.RideDetails) error {
 	responseBytes, err := io.ReadAll(getClassResponse.Body)
 	if err != nil {
 		return err
+	}
+	if getClassResponse.StatusCode != 200 {
+		return fmt.Errorf("could not get class %d: %s", getClassResponse.StatusCode, responseBytes)
 	}
 	err = json.Unmarshal(responseBytes, &ride)
 	if err != nil {
