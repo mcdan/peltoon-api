@@ -28,6 +28,11 @@ type Client struct {
 const apiURL = "https://api.onepeloton.com"
 const graphURL = "https://gql-graphql-gateway.prod.k8s.onepeloton.com/graphql"
 
+// First token is class id
+// Second token is the invite's peloton home id
+// third is the join token.
+const inviteURLTemplate = "https://members.onepeloton.com/scheduled/class/%s/%s?join_token=%s&start=0&type=0&locale=en-US"
+
 func InitializeClient(c *Client) {
 	jar, _ := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
 	c.httpClient = &http.Client{
@@ -145,7 +150,8 @@ func (c Client) GenerateInviteLink(classID string, startTime time.Time) (string,
 	dataPayload := result["data"].(map[string]interface{})
 	methodResponse := dataPayload["addClassToSchedule"].(map[string]interface{})
 	joinToken := methodResponse["id"]
-	return fmt.Sprintf("https://members.onepeloton.com/schedule/yourschedule?join_token=%s&start=0&type=0&locale=en-US", joinToken), nil
+	pelotonId := methodResponse["pelotonId"]
+	return fmt.Sprintf(inviteURLTemplate, classID, pelotonId, joinToken), nil
 }
 
 func (c Client) GetRide(id string, ride *dto.RideDetails) error {
