@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
-	"strings"
 	"time"
 
 	"github.com/mcdan/peltoon-api/pkg/dto"
@@ -104,28 +103,17 @@ func (c Client) GenerateInviteLink(classID string, startTime time.Time) (string,
 	}
 	easternStartTime := startTime.In(easternLocation)
 	encodedToken := base64.StdEncoding.EncodeToString(scheduleTokenBytes)
-	queryVariables := map[string]string{
-		"id":        encodedToken,
-		"startTime": easternStartTime.Format("Mon Jan 02 2006 15:04:05 GMT-0700"),
-	}
-	invitePayload := payloads.GraphOperation{
-		OperationName: "AddClassToSchedule",
-		Variables:     queryVariables,
-		Query:         payloads.AddClassToSchedule,
-	}
 
-	inviteBody, err := json.Marshal(invitePayload)
+	invitePayload, err := payloads.GetInvite(encodedToken, easternStartTime)
 	if err != nil {
 		return "", err
 	}
-	newString := strings.ReplaceAll(string(inviteBody), `\\n`, `\n`)
-	bodyReader := bytes.NewReader([]byte(newString))
+	bodyReader := bytes.NewReader([]byte(invitePayload))
 
 	createInviteReq, err := createRequest(http.MethodPost, graphURL, bodyReader)
 	if err != nil {
 		return "", err
 	}
-
 	inviteResponse, err := c.httpClient.Do(createInviteReq)
 	if err != nil {
 		return "", err
@@ -149,17 +137,81 @@ func (c Client) GenerateInviteLink(classID string, startTime time.Time) (string,
 	}
 	dataPayload := result["data"].(map[string]interface{})
 	methodResponse := dataPayload["addClassToSchedule"].(map[string]interface{})
-	joinToken := methodResponse["id"]
-	pelotonId := methodResponse["pelotonId"]
-	return fmt.Sprintf(inviteURLTemplate, classID, pelotonId, joinToken), nil
+	joinToken := methodResponse["id"].(string)
+	pelotonID := methodResponse["pelotonId"].(string)
+	return renderJoinUrl(classID, pelotonID, joinToken), nil
 }
 
 func (c Client) GetRide(id string, ride *dto.RideDetails) error {
-	getClassRequest, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/ride/%s/details", apiURL, id), nil)
+	getClassRequest, err := createRequest(http.MethodGet, fmt.Sprintf("%s/api/ride/%s/details", apiURL, id), nil)
 	if err != nil {
 		return err
 	}
 	getClassResponse, err := c.httpClient.Do(getClassRequest)
+	if err != nil {
+		return err
+	}
+	if getClassResponse.StatusCode != 200 {
+		return fmt.Errorf("could not get class %d", getClassResponse.StatusCode)
+	}
+
+	responseBytes, err := io.ReadAll(getClassResponse.Body)
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(responseBytes, &ride)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+func (c Client) GetScheduled(startTime time.Time, endTime time.Time, limit int) ([]*dto.YourScheduleItem, error) {
+	scheduleListPayload, err := payloads.GetSchedule(startTime, endTime, limit)
+	if err != nil {
+		return []*dto.YourScheduleItem{}, err
+	}
+	bodyReader := bytes.NewReader([]byte(scheduleListPayload))
+	getScheduleRequest, err := createRequest(http.MethodPost, fmt.Sprintf("%s/graphql?query=YourScheduleItem", graphURL), bodyReader)
+	if err != nil {
+		return []*dto.YourScheduleItem{}, err
+	}
+	getClassResponse, err := c.httpClient.Do(getScheduleRequest)
+	if err != nil {
+		return []*dto.YourScheduleItem{}, err
+	}
+	responseBytes, err := io.ReadAll(getClassResponse.Body)
+	if err != nil {
+		return []*dto.YourScheduleItem{}, err
+	}
+	if getClassResponse.StatusCode != 200 {
+		return []*dto.YourScheduleItem{}, fmt.Errorf("could not get scheduled classes for user: %s", responseBytes)
+	}
+	structuredResponse := dto.YourScheduledItemsResponse{}
+	err = json.Unmarshal(responseBytes, &structuredResponse)
+	if err != nil {
+		return []*dto.YourScheduleItem{}, err
+	}
+
+	if len(structuredResponse.Data.UserScheduledItemsList.YourScheduleItems) <= 0 {
+		return []*dto.YourScheduleItem{}, err
+	}
+	scheduledClasses := make([]*dto.YourScheduleItem, len(structuredResponse.Data.UserScheduledItemsList.YourScheduleItems))
+	for i := range structuredResponse.Data.UserScheduledItemsList.YourScheduleItems {
+		item := structuredResponse.Data.UserScheduledItemsList.YourScheduleItems[i]
+		item.JoinURL = renderJoinUrl(item.PelotonClass.ClassId, item.PelotonId, item.JoinToken)
+		scheduledClasses[i] = &item
+	}
+	return scheduledClasses, nil
+}
+
+func (c Client) DeleteScheduledClass(joinToken string) error {
+	scheduleListPayload, err := payloads.RemoveScheduledClass(joinToken)
+	if err != nil {
+		return err
+	}
+	bodyReader := bytes.NewReader([]byte(scheduleListPayload))
+	removeScheduledRequest, err := createRequest(http.MethodPost, fmt.Sprintf("%s/graphql", graphURL), bodyReader)
+	getClassResponse, err := c.httpClient.Do(removeScheduledRequest)
 	if err != nil {
 		return err
 	}
@@ -168,15 +220,11 @@ func (c Client) GetRide(id string, ride *dto.RideDetails) error {
 		return err
 	}
 	if getClassResponse.StatusCode != 200 {
-		return fmt.Errorf("could not get class %d: %s", getClassResponse.StatusCode, responseBytes)
+		return fmt.Errorf("could not get scheduled classes for user: %s", responseBytes)
 	}
-	err = json.Unmarshal(responseBytes, &ride)
-	if err != nil {
-		return err
-	}
+
 	return nil
 }
-
 func createRequest(method string, url string, body io.Reader) (*http.Request, error) {
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
@@ -185,4 +233,8 @@ func createRequest(method string, url string, body io.Reader) (*http.Request, er
 	req.Header.Add("Content-Type", "application/json")
 	req.Header.Add("User-Agent", "golang-peltoon-api")
 	return req, err
+}
+
+func renderJoinUrl(classID string, pelotonID string, joinToken string) string {
+	return fmt.Sprintf(inviteURLTemplate, classID, pelotonID, joinToken)
 }
