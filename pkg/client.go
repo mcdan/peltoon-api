@@ -137,6 +137,12 @@ func (c Client) GenerateInviteLink(classID string, startTime time.Time) (string,
 	}
 	dataPayload := result["data"].(map[string]interface{})
 	methodResponse := dataPayload["addClassToSchedule"].(map[string]interface{})
+	// We get HTTP status 200 but with errors in the payload, they seem to be of the form:
+	// {"data":{"addClassToSchedule":{"code":"CLASS_NOT_ELIGIBLE","message":"Cannot schedule an ineligible class type","__typename":"CannotScheduleClassError"}}}
+	if _, ok := methodResponse["code"]; ok {
+		code := methodResponse["code"].(string)
+		return "", fmt.Errorf("operation failed with code: %s", code)
+	}
 	joinToken := methodResponse["id"].(string)
 	pelotonID := methodResponse["pelotonId"].(string)
 	return renderJoinUrl(classID, pelotonID, joinToken), nil
