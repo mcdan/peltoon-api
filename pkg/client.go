@@ -204,7 +204,7 @@ func (c Client) GetScheduled(startTime time.Time, endTime time.Time, limit int) 
 	scheduledClasses := make([]*dto.YourScheduleItem, len(structuredResponse.Data.UserScheduledItemsList.YourScheduleItems))
 	for i := range structuredResponse.Data.UserScheduledItemsList.YourScheduleItems {
 		item := structuredResponse.Data.UserScheduledItemsList.YourScheduleItems[i]
-		item.JoinURL = renderJoinUrl(item.PelotonClass.ClassId, item.PelotonId, item.JoinToken)
+		item.JoinURL = renderJoinUrl(item.PelotonClass.ClassId, item.PelotonId, item.Id)
 		scheduledClasses[i] = &item
 	}
 	return scheduledClasses, nil
